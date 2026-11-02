@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rv-moex"
+version = "0.1.0"
+description = "Realized volatility forecasting on MOEX equities"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy", "pandas", "scipy", "scikit-learn", "statsmodels",
+    "lightgbm", "arch", "matplotlib", "pyarrow", "requests", "apimoex",
+]
+
+[project.optional-dependencies]
+nn  = ["torch"]
+dev = ["pytest", "jupyter", "ruff"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,16 +1,17 @@
 ﻿<#
 .SYNOPSIS
-    Управление этапами проекта: создание ветки и отправка результата на GitHub.
+    Управление стадиями проекта: ветка на старте, проверки, коммит и отправка на GitHub по завершении.
 
 .EXAMPLE
-    .\stage.ps1 start week1-data
-    .\stage.ps1 finish -Message "Week 1: loader and RV"
-    .\stage.ps1 finish -Message "Week 1: loader and RV" -Merge -Tag
+    .\stage.ps1 list
+    .\stage.ps1 start 1
+    .\stage.ps1 finish
+    .\stage.ps1 finish -Message "Stage 1: loader and RV" -Merge -Tag
     .\stage.ps1 status
 #>
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('start', 'finish', 'status')]
+    [ValidateSet('list', 'start', 'finish', 'status')]
     [string]$Action,
 
     [Parameter(Position = 1)]
@@ -24,6 +25,17 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
+
+$Stages = @{
+    '1' = 'data'
+    '2' = 'baselines'
+    '3' = 'linear'
+    '4' = 'lgbm'
+    '5' = 'gru'
+    '6' = 'analysis'
+    '7' = 'robustness'
+    '8' = 'release'
+}
 
 function Invoke-Checked {
     param([string]$Exe, [string[]]$CmdArgs)
@@ -49,7 +61,13 @@ function Test-GitOk {
     return ($LASTEXITCODE -eq 0)
 }
 
-# --- Проверки окружения ---
+if ($Action -eq 'list') {
+    foreach ($k in ($Stages.Keys | Sort-Object { [int]$_ })) {
+        Write-Host ("Стадия {0}: stage{0}-{1}" -f $k, $Stages[$k])
+    }
+    return
+}
+
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'Git не найден в PATH.' }
 $top = (Get-GitText @('rev-parse', '--show-toplevel')) -replace '/', '\'
 if ((Resolve-Path $top).Path -ne (Resolve-Path $PSScriptRoot).Path) {
@@ -109,12 +127,22 @@ switch ($Action) {
     }
 
     'start' {
-        if (-not $Name) { throw 'Укажите имя ветки: .\stage.ps1 start week1-data' }
+        if (-not $Name) { throw 'Укажите номер стадии или имя ветки: .\stage.ps1 start 1' }
+        if ($Name -match '^\d+$') {
+            if (-not $Stages.ContainsKey($Name)) { throw "Нет стадии с номером $Name. Список: .\stage.ps1 list" }
+            $Name = "stage$Name-$($Stages[$Name])"
+        }
         if ($Name -notmatch '^[a-z0-9][a-z0-9._/-]*$') {
             throw 'Имя ветки: строчные латинские буквы, цифры, ".", "_", "-", "/".'
         }
-        if (Get-GitText @('status', '--porcelain')) {
-            throw 'Есть незакоммиченные изменения. Завершите этап (finish) или уберите изменения (git stash).'
+        $tracked = Get-GitText @('status', '--porcelain', '--untracked-files=no')
+        if ($tracked) {
+            Write-Host $tracked
+            throw 'Есть изменения в отслеживаемых файлах. Завершите стадию (finish) или уберите изменения (git stash).'
+        }
+        $untracked = Get-GitText @('ls-files', '--others', '--exclude-standard')
+        if ($untracked) {
+            Write-Warning "Неотслеживаемые файлы перейдут в новую ветку вместе с Вами:`n$untracked"
         }
         if (Test-GitOk @('show-ref', '--verify', '--quiet', "refs/heads/$Name")) {
             throw "Ветка уже существует: $Name"
@@ -125,9 +153,12 @@ switch ($Action) {
     }
 
     'finish' {
-        if ($branch -eq 'main') { throw 'Вы на main. Перейдите на ветку этапа или создайте её: .\stage.ps1 start имя' }
+        if ($branch -eq 'main') { throw 'Вы на main. Перейдите на ветку стадии: .\stage.ps1 start <номер>' }
         if (-not $hasRemote) { throw 'Не задан удалённый репозиторий origin. Сначала выполните github_push.ps1.' }
-        if (-not $Message) { $Message = "Stage: $branch" }
+        if (-not $Message) {
+            if ($branch -match '^stage(\d+)-(.+)$') { $Message = "Stage $($Matches[1]): $($Matches[2])" }
+            else { $Message = "Stage: $branch" }
+        }
 
         Test-Project
 
@@ -153,13 +184,13 @@ switch ($Action) {
         }
 
         if ($Tag) {
-            $tagName = "stage-$($branch -replace '/', '-')"
+            $tagName = "done-$($branch -replace '/', '-')"
             Invoke-Checked git @('tag', '-a', $tagName, '-m', $Message)
             Invoke-Checked git @('push', 'origin', $tagName)
         }
 
         Write-Host ''
-        Write-Host "Этап завершён. Последний коммит: $(Get-GitText @('log', '--oneline', '-1'))" -ForegroundColor Green
+        Write-Host "Стадия завершена. Последний коммит: $(Get-GitText @('log', '--oneline', '-1'))" -ForegroundColor Green
         if (-not $Merge) {
             Write-Host 'Слияние с main не выполнялось. Для слияния: .\stage.ps1 finish -Merge (или Pull Request на GitHub).'
         }
